@@ -1,6 +1,8 @@
 package voxel
 
 import win "core:sys/windows"
+import d3d11 "vendor:directx/d3d11"
+import dxgi "vendor:directx/dxgi"
 
 win_proc :: proc "stdcall" (window: win.HWND, message: win.UINT,
 		wparam: win.WPARAM, lparam: win.LPARAM) -> win.LRESULT {
@@ -56,6 +58,95 @@ main :: proc() {
 		return
 	}
 	
+	device : ^d3d11.IDevice
+	device_context : ^d3d11.IDeviceContext
+	{
+		device0 : ^d3d11.IDevice
+		device_context0 : ^d3d11.IDeviceContext
+		feature_levels : []d3d11.FEATURE_LEVEL =
+			{d3d11.FEATURE_LEVEL._11_0}
+		creation_flags := d3d11.CREATE_DEVICE_FLAGS{.BGRA_SUPPORT}
+		
+		result := d3d11.CreateDevice(nil, d3d11.DRIVER_TYPE.HARDWARE,
+			nil, creation_flags, &feature_levels[0], 
+			u32(len(feature_levels)), d3d11.SDK_VERSION, &device0, nil,
+			&device_context0)
+			
+		if win.FAILED(result) {
+			assert(false)
+			return
+		}
+		
+		result = device0->QueryInterface(d3d11.IDevice_UUID,
+			(^rawptr)(&device))
+		assert(win.SUCCEEDED(result))
+		device0->Release()
+		
+		result = device_context0->QueryInterface(
+			d3d11.IDeviceContext_UUID, (^rawptr)(&device_context))
+		assert(win.SUCCEEDED(result))
+		device_context0->Release()
+	}
+	
+	swap_chain : ^dxgi.ISwapChain1
+	{
+		dxgi_factory : ^dxgi.IFactory2
+		{
+			dxgi_device : ^dxgi.IDevice1
+			result := device->QueryInterface(dxgi.IDevice1_UUID,
+				(^rawptr)(&dxgi_device))
+			assert(win.SUCCEEDED(result))
+			
+			dxgi_adapter : ^dxgi.IAdapter
+			result = dxgi_device->GetAdapter(&dxgi_adapter)
+			assert(win.SUCCEEDED(result))
+			dxgi_device->Release()
+			
+			adapter_desc : dxgi.ADAPTER_DESC;
+			dxgi_adapter->GetDesc(&adapter_desc)
+			
+			result = dxgi_adapter->GetParent(dxgi.IFactory2_UUID,
+				(^rawptr)(&dxgi_factory))
+			assert(win.SUCCEEDED(result))
+			dxgi_adapter->Release()
+		}
+		
+		swap_chain_desc := dxgi.SWAP_CHAIN_DESC1 {
+			Width = 0,
+			Height = 0,
+			Format = dxgi.FORMAT.B8G8R8A8_UNORM_SRGB,
+			SampleDesc = {
+				Count = 1,
+				Quality = 0
+			},
+			BufferUsage = {.RENDER_TARGET_OUTPUT},
+			BufferCount = 2,
+			Scaling = dxgi.SCALING.STRETCH,
+			SwapEffect = dxgi.SWAP_EFFECT.DISCARD,
+			AlphaMode = dxgi.ALPHA_MODE.UNSPECIFIED,
+			Flags = {}
+		}
+		
+		result := dxgi_factory->CreateSwapChainForHwnd(device,
+			window, &swap_chain_desc, nil, nil, &swap_chain)
+		assert(win.SUCCEEDED(result))
+		
+		dxgi_factory->Release()
+	}
+	
+	frame_buffer_view : ^d3d11.IRenderTargetView
+	{
+		frame_buffer : ^d3d11.ITexture2D
+		result := swap_chain->GetBuffer(0, d3d11.ITexture2D_UUID,
+			(^rawptr)(&frame_buffer))
+		assert(win.SUCCEEDED(result))
+		
+		result = device->CreateRenderTargetView(frame_buffer, nil,
+			&frame_buffer_view)
+		assert(win.SUCCEEDED(result))
+		frame_buffer->Release()
+	}
+	
 	running := true
 	for running {
 		message : win.MSG;
@@ -68,6 +159,10 @@ main :: proc() {
 			win.DispatchMessageW(&message);
 		}
 		
-		win.Sleep(1)
+		background_color := [4]f32{0.1, 0.2, 0.6, 1.0}
+		device_context->ClearRenderTargetView(frame_buffer_view,
+			&background_color)
+			
+		swap_chain->Present(1, nil)
 	}
 }
