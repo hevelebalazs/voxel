@@ -1,8 +1,11 @@
 package voxel
 
+import "core:fmt"
+
 import win "core:sys/windows"
 import d3d11 "vendor:directx/d3d11"
 import dxgi "vendor:directx/dxgi"
+import d3d "vendor:directx/d3d_compiler"
 
 win_proc :: proc "stdcall" (window: win.HWND, message: win.UINT,
 		wparam: win.WPARAM, lparam: win.LPARAM) -> win.LRESULT {
@@ -147,6 +150,89 @@ main :: proc() {
 		frame_buffer->Release()
 	}
 	
+	vs_blob : ^d3d11.IBlob
+	vertex_shader : ^d3d11.IVertexShader
+	{
+		error_blob : ^d3d11.IBlob
+		result := d3d.CompileFromFile(win.L("shader/shaders.hlsl"),
+			nil, nil, "vs_main", "vs_5_0", 0, 0, &vs_blob, &error_blob)
+		
+		if win.FAILED(result) {
+			error := (cstring)(error_blob->GetBufferPointer())
+			fmt.println(error)
+			
+			return
+		}
+		
+		result = device->CreateVertexShader(vs_blob->GetBufferPointer(),
+			vs_blob->GetBufferSize(), nil, &vertex_shader)
+		assert(win.SUCCEEDED(result))
+	}
+	
+	pixel_shader : ^d3d11.IPixelShader
+	{
+		ps_blob : ^d3d11.IBlob
+		error_blob : ^d3d11.IBlob
+		result := d3d.CompileFromFile(win.L("shader/shaders.hlsl"),
+			nil, nil, "ps_main", "ps_5_0", 0, 0, &ps_blob, &error_blob)
+		if win.FAILED(result) {
+			error := (cstring)(error_blob->GetBufferPointer())
+			fmt.println(error)
+			
+			return
+		}
+		
+		result = device->CreatePixelShader(ps_blob->GetBufferPointer(),
+			ps_blob->GetBufferSize(), nil, &pixel_shader)
+		assert(win.SUCCEEDED(result))
+		
+		ps_blob->Release()
+	}
+	
+	input_layout : ^d3d11.IInputLayout
+	{
+		input_element_desc := []d3d11.INPUT_ELEMENT_DESC{
+			{"POS", 0, .R32G32_FLOAT, 0, 0, .VERTEX_DATA, 0},
+			{"COL", 0, .R32G32B32A32_FLOAT, 0,
+				d3d11.APPEND_ALIGNED_ELEMENT, .VERTEX_DATA, 0}
+		}
+		
+		result := device->CreateInputLayout(&input_element_desc[0],
+			(u32)(len(input_element_desc)), vs_blob->GetBufferPointer(),
+			vs_blob->GetBufferSize(), &input_layout)
+		assert(win.SUCCEEDED(result))
+		vs_blob->Release()
+	}
+	
+	vertex_buffer : ^d3d11.IBuffer
+	vertex_n : u32
+	stride : u32
+	offset : u32
+	{
+		vertex_data := []f32{
+			 0.0,  0.5, 0.0, 1.0, 0.0, 1.0,
+			 0.5, -0.5, 1.0, 0.0, 0.0, 1.0,
+			-0.5, -0.5, 0.0, 0.0, 1.0, 1.0
+		}
+		
+		stride = 6 * size_of(f32)
+		vertex_n = (u32)(len(vertex_data) / 6)
+		offset = 0
+		
+		vertex_buffer_desc := d3d11.BUFFER_DESC{
+			ByteWidth = (u32)(len(vertex_data) * size_of(f32)),
+			Usage = .IMMUTABLE,
+			BindFlags = {.VERTEX_BUFFER}
+		}
+		
+		subresource_data := d3d11.SUBRESOURCE_DATA{
+			(rawptr)(&vertex_data[0]), 0, 0}
+		
+		result := device->CreateBuffer(&vertex_buffer_desc,
+			&subresource_data, &vertex_buffer)
+		assert(win.SUCCEEDED(result))
+	}
+	
 	running := true
 	for running {
 		message : win.MSG;
@@ -162,6 +248,24 @@ main :: proc() {
 		background_color := [4]f32{0.1, 0.2, 0.6, 1.0}
 		device_context->ClearRenderTargetView(frame_buffer_view,
 			&background_color)
+			
+		rect : win.RECT
+		win.GetClientRect(window, &rect)
+		viewport := d3d11.VIEWPORT{0.0, 0.0,
+			(f32)(rect.right - rect.left),
+			(f32)(rect.bottom - rect.top), 0.0, 1.0}
+		device_context->RSSetViewports(1, &viewport)
+		device_context->OMSetRenderTargets(1, &frame_buffer_view, nil)
+		device_context->IASetPrimitiveTopology(.TRIANGLELIST)
+		device_context->IASetInputLayout(input_layout)
+		
+		device_context->VSSetShader(vertex_shader, nil, 0)
+		device_context->PSSetShader(pixel_shader, nil, 0)
+		
+		device_context->IASetVertexBuffers(0, 1, &vertex_buffer,
+			&stride, &offset)
+			
+		device_context->Draw(vertex_n, 0)
 			
 		swap_chain->Present(1, nil)
 	}
